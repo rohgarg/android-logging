@@ -10,7 +10,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
+import android.os.AsyncTask;
 import android.os.Bundle;
+import android.text.TextUtils;
 import android.text.method.ScrollingMovementMethod;
 import android.view.View;
 import android.view.ViewGroup;
@@ -20,10 +22,20 @@ import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
+import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GoogleApiAvailability;
+import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
+import com.google.api.client.json.JsonFactory;
+import com.google.api.client.json.jackson2.JacksonFactory;
+import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.services.sheets.v4.SheetsScopes;
+import com.google.api.services.sheets.v4.model.ValueRange;
 
+import java.io.IOException;
+import java.security.GeneralSecurityException;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import pub.devrel.easypermissions.AfterPermissionGranted;
@@ -36,7 +48,8 @@ public class MainActivity extends Activity
   private Button mCallApiButton;
 
   ProgressDialog mProgress;
-  // GoogleAccountCredential mCredential;
+  // FIXME: Check this
+  GoogleCredential mCredential;
 
   static final int REQUEST_ACCOUNT_PICKER = 1000;
   static final int REQUEST_AUTHORIZATION = 1001;
@@ -93,12 +106,12 @@ public class MainActivity extends Activity
 
     setContentView(activityLayout);
 
-
+    // FIXME: This needs to be checked
+    mCredential = new GoogleCredential.Builder().build().createScoped(Arrays.asList(SCOPES));
     // Initialize credentials and service object.
     // mCredential = GoogleAccountCredential.usingOAuth2(
     //         getApplicationContext(), Arrays.asList(SCOPES))
     //         .setBackOff(new ExponentialBackOff());
-    // String token = GoogleAuthUtil.getToken(getApplicationContext(), Account())
   }
 
   /**
@@ -111,12 +124,16 @@ public class MainActivity extends Activity
   private void getResultsFromApi() {
     if (!isGooglePlayServicesAvailable()) {
       acquireGooglePlayServices();
-    // } else if (mCredential.getSelectedAccountName() == null) {
-    //   chooseAccount();
+    } else if (mCredential.getServiceAccountId() == null) { // .getSelectedAccountName() == null) {
+       chooseAccount();
     } else if (!isDeviceOnline()) {
       mOutputText.setText("No network connection available.");
     } else {
-      // new MakeRequestTask(mCredential).execute();
+      try {
+        new MakeRequestTask(mCredential).execute();
+      } catch (Exception e) {
+
+      }
     }
   }
 
@@ -137,9 +154,11 @@ public class MainActivity extends Activity
       String accountName = getPreferences(Context.MODE_PRIVATE)
               .getString(PREF_ACCOUNT_NAME, null);
       if (accountName != null) {
+        // FIXME: GoogleCredential object can be modified only while building it
         // mCredential.setSelectedAccountName(accountName);
         getResultsFromApi();
       } else {
+        // TODO: Need to start a new activity here
         // Start a dialog from which the user can choose an account
         // startActivityForResult(
         //         mCredential.newChooseAccountIntent(),
@@ -286,4 +305,107 @@ public class MainActivity extends Activity
   public void onPermissionsDenied(int requestCode, @NonNull List<String> perms) {
     // Do nothing.
   }
+
+  /**
+   * An asynchronous task that handles the Google Sheets API call.
+   * Placing the API calls in their own task ensures the UI stays responsive.
+   */
+  private class MakeRequestTask extends AsyncTask<Void, Void, List<String>> {
+    private com.google.api.services.sheets.v4.Sheets mService = null;
+    private Exception mLastError = null;
+
+    MakeRequestTask(GoogleCredential credential) throws IOException, GeneralSecurityException {
+      // This API doesn't seem to exist
+      // HttpTransport transport = AndroidHttp.newCompatibleTransport();
+      final NetHttpTransport transport = GoogleNetHttpTransport.newTrustedTransport();
+      JsonFactory jsonFactory = JacksonFactory.getDefaultInstance();
+      mService = new com.google.api.services.sheets.v4.Sheets.Builder(
+               transport, jsonFactory, credential)
+               .setApplicationName("Google Sheets API Android Quickstart")
+               .build();
+    }
+
+    /**
+     * Background task to call Google Sheets API.
+     * @param params no parameters needed for this task.
+     */
+    @Override
+    protected List<String> doInBackground(Void... params) {
+      try {
+        return getDataFromApi();
+      } catch (Exception e) {
+        mLastError = e;
+        cancel(true);
+        return null;
+      }
+    }
+
+    /**
+     * Fetch a list of names and majors of students in a sample spreadsheet:
+     * https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit
+     * @return List of names and majors
+     * @throws IOException
+     */
+    private List<String> getDataFromApi() throws IOException {
+      String spreadsheetId = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms";
+      String range = "Class Data!A2:E";
+      List<String> results = new ArrayList<>();
+      ValueRange response = this.mService.spreadsheets().values()
+              .get(spreadsheetId, range)
+              .execute();
+      List<List<Object>> values = response.getValues();
+      if (values != null) {
+        results.add("Name, Major");
+        for (List row : values) {
+          results.add(row.get(0) + ", " + row.get(4));
+        }
+      }
+      return results;
+    }
+
+
+
+    @Override
+    protected void onPreExecute() {
+      mOutputText.setText("");
+      mProgress.show();
+    }
+
+    @Override
+    protected void onPostExecute(List<String> output) {
+      mProgress.hide();
+      if (output == null || output.size() == 0) {
+        mOutputText.setText("No results returned.");
+      } else {
+        output.add(0, "Data retrieved using the Google Sheets API:");
+        mOutputText.setText(TextUtils.join("\n", output));
+      }
+    }
+
+    @Override
+    protected void onCancelled() {
+      mProgress.hide();
+      if (mLastError != null) {
+        /*
+        if (mLastError instanceof GooglePlayServicesAvailabilityIOException) {
+          showGooglePlayServicesAvailabilityErrorDialog(
+                  ((GooglePlayServicesAvailabilityIOException) mLastError)
+                          .getConnectionStatusCode());
+        } else if (mLastError instanceof UserRecoverableAuthIOException) {
+          startActivityForResult(
+                  ((UserRecoverableAuthIOException) mLastError).getIntent(),
+                  MainActivity.REQUEST_AUTHORIZATION);
+        } else {
+        */
+          mOutputText.setText("The following error occurred:\n"
+                  + mLastError.getMessage());
+        /*
+        }
+        */
+      } else {
+        mOutputText.setText("Request cancelled.");
+      }
+    }
+  }
+
 }
