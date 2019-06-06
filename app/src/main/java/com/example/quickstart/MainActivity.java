@@ -22,13 +22,16 @@ import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
-import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GoogleApiAvailability;
-import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
+import com.google.api.client.extensions.android.http.AndroidHttp;
+import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential;
+import com.google.api.client.googleapis.extensions.android.gms.auth.GooglePlayServicesAvailabilityIOException;
+import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException;
+import com.google.api.client.http.HttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.client.json.jackson2.JacksonFactory;
-import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.util.ExponentialBackOff;
 import com.google.api.services.sheets.v4.SheetsScopes;
 import com.google.api.services.sheets.v4.model.ValueRange;
 
@@ -48,8 +51,7 @@ public class MainActivity extends Activity
   private Button mCallApiButton;
 
   ProgressDialog mProgress;
-  // FIXME: Check this
-  GoogleCredential mCredential;
+  GoogleAccountCredential mCredential;
 
   static final int REQUEST_ACCOUNT_PICKER = 1000;
   static final int REQUEST_AUTHORIZATION = 1001;
@@ -106,12 +108,10 @@ public class MainActivity extends Activity
 
     setContentView(activityLayout);
 
-    // FIXME: This needs to be checked
-    mCredential = new GoogleCredential.Builder().build().createScoped(Arrays.asList(SCOPES));
     // Initialize credentials and service object.
-    // mCredential = GoogleAccountCredential.usingOAuth2(
-    //         getApplicationContext(), Arrays.asList(SCOPES))
-    //         .setBackOff(new ExponentialBackOff());
+    mCredential = GoogleAccountCredential.usingOAuth2(
+            getApplicationContext(), Arrays.asList(SCOPES))
+            .setBackOff(new ExponentialBackOff());
   }
 
   /**
@@ -124,16 +124,12 @@ public class MainActivity extends Activity
   private void getResultsFromApi() {
     if (!isGooglePlayServicesAvailable()) {
       acquireGooglePlayServices();
-    } else if (mCredential.getServiceAccountId() == null) { // .getSelectedAccountName() == null) {
+    } else if (mCredential.getSelectedAccountName() == null) {
        chooseAccount();
     } else if (!isDeviceOnline()) {
       mOutputText.setText("No network connection available.");
     } else {
-      try {
         new MakeRequestTask(mCredential).execute();
-      } catch (Exception e) {
-
-      }
     }
   }
 
@@ -154,15 +150,11 @@ public class MainActivity extends Activity
       String accountName = getPreferences(Context.MODE_PRIVATE)
               .getString(PREF_ACCOUNT_NAME, null);
       if (accountName != null) {
-        // FIXME: GoogleCredential object can be modified only while building it
-        // mCredential.setSelectedAccountName(accountName);
+        mCredential.setSelectedAccountName(accountName);
         getResultsFromApi();
       } else {
-        // TODO: Need to start a new activity here
         // Start a dialog from which the user can choose an account
-        // startActivityForResult(
-        //         mCredential.newChooseAccountIntent(),
-        //         REQUEST_ACCOUNT_PICKER);
+        startActivityForResult(mCredential.newChooseAccountIntent(), REQUEST_ACCOUNT_PICKER);
       }
     } else {
       // Request the GET_ACCOUNTS permission via a user dialog
@@ -208,7 +200,7 @@ public class MainActivity extends Activity
             SharedPreferences.Editor editor = settings.edit();
             editor.putString(PREF_ACCOUNT_NAME, accountName);
             editor.apply();
-            // mCredential.setSelectedAccountName(accountName);
+            mCredential.setSelectedAccountName(accountName);
             getResultsFromApi();
           }
         }
@@ -314,10 +306,8 @@ public class MainActivity extends Activity
     private com.google.api.services.sheets.v4.Sheets mService = null;
     private Exception mLastError = null;
 
-    MakeRequestTask(GoogleCredential credential) throws IOException, GeneralSecurityException {
-      // This API doesn't seem to exist
-      // HttpTransport transport = AndroidHttp.newCompatibleTransport();
-      final NetHttpTransport transport = GoogleNetHttpTransport.newTrustedTransport();
+    MakeRequestTask(GoogleAccountCredential credential) {
+      HttpTransport transport = AndroidHttp.newCompatibleTransport();
       JsonFactory jsonFactory = JacksonFactory.getDefaultInstance();
       mService = new com.google.api.services.sheets.v4.Sheets.Builder(
                transport, jsonFactory, credential)
@@ -363,8 +353,6 @@ public class MainActivity extends Activity
       return results;
     }
 
-
-
     @Override
     protected void onPreExecute() {
       mOutputText.setText("");
@@ -386,7 +374,6 @@ public class MainActivity extends Activity
     protected void onCancelled() {
       mProgress.hide();
       if (mLastError != null) {
-        /*
         if (mLastError instanceof GooglePlayServicesAvailabilityIOException) {
           showGooglePlayServicesAvailabilityErrorDialog(
                   ((GooglePlayServicesAvailabilityIOException) mLastError)
@@ -396,12 +383,9 @@ public class MainActivity extends Activity
                   ((UserRecoverableAuthIOException) mLastError).getIntent(),
                   MainActivity.REQUEST_AUTHORIZATION);
         } else {
-        */
           mOutputText.setText("The following error occurred:\n"
                   + mLastError.getMessage());
-        /*
         }
-        */
       } else {
         mOutputText.setText("Request cancelled.");
       }

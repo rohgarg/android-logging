@@ -27,6 +27,11 @@ dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.2.0'
     implementation 'com.google.android.gms:play-services-auth:16.0.1'
     implementation 'pub.devrel:easypermissions:3.0.0'
-    implementation 'com.google.api-client:google-api-client:1.23.0'
-    implementation 'com.google.apis:google-api-services-sheets:v4-rev516-1.23.0'
+    implementation('com.google.apis:google-api-services-sheets:v4-rev516-1.23.0') {
+        exclude group: 'org.apache.httpcomponents'
+    }
+    implementation(group: 'com.google.api-client', name: 'google-api-client-android', version: '1.25.0') {
+        exclude group: 'org.apache.httpcomponents'
+    }
+
 }
