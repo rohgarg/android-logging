@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
+import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.text.TextUtils;
@@ -36,7 +37,6 @@ import com.google.api.services.sheets.v4.SheetsScopes;
 import com.google.api.services.sheets.v4.model.ValueRange;
 
 import java.io.IOException;
-import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -88,7 +88,7 @@ public class MainActivity extends Activity
       public void onClick(View v) {
         mCallApiButton.setEnabled(false);
         mOutputText.setText("");
-        getResultsFromApi();
+        getResultsFromApi(-1);
         mCallApiButton.setEnabled(true);
       }
     });
@@ -100,11 +100,10 @@ public class MainActivity extends Activity
     mOutputText.setVerticalScrollBarEnabled(true);
     mOutputText.setMovementMethod(new ScrollingMovementMethod());
     mOutputText.setText(
-            "Click the \'" + BUTTON_TEXT +"\' button to test the API.");
+            "Click the \'" + BUTTON_TEXT + "\' button to test the API.");
     activityLayout.addView(mOutputText);
 
     mProgress = new ProgressDialog(this);
-    mProgress.setMessage("Calling Google Sheets API ...");
 
     setContentView(activityLayout);
 
@@ -112,6 +111,28 @@ public class MainActivity extends Activity
     mCredential = GoogleAccountCredential.usingOAuth2(
             getApplicationContext(), Arrays.asList(SCOPES))
             .setBackOff(new ExponentialBackOff());
+    handleAppLinkIntent(getIntent());
+  }
+
+  @Override
+  protected void onNewIntent(Intent intent) {
+    super.onNewIntent(intent);
+    handleAppLinkIntent(intent);
+  }
+
+  private void handleAppLinkIntent(Intent intent) {
+    String appLinkAction = intent.getAction();
+    Uri appLinkData = intent.getData();
+    if (Intent.ACTION_VIEW.equals(appLinkAction) && appLinkData != null) {
+      int numRows = -1;
+      try {
+        numRows = Integer.parseInt(appLinkData.getLastPathSegment());
+      } catch (NumberFormatException e) {
+        // TODO: Show error to user
+        e.printStackTrace();
+      }
+      getResultsFromApi(numRows);
+    }
   }
 
   /**
@@ -121,15 +142,15 @@ public class MainActivity extends Activity
    * of the preconditions are not satisfied, the app will prompt the user as
    * appropriate.
    */
-  private void getResultsFromApi() {
+  private void getResultsFromApi(int numRows) {
     if (!isGooglePlayServicesAvailable()) {
       acquireGooglePlayServices();
     } else if (mCredential.getSelectedAccountName() == null) {
-       chooseAccount();
+       chooseAccount(numRows);
     } else if (!isDeviceOnline()) {
       mOutputText.setText("No network connection available.");
     } else {
-        new MakeRequestTask(mCredential).execute();
+        new MakeRequestTask(mCredential, numRows).execute();
     }
   }
 
@@ -144,14 +165,14 @@ public class MainActivity extends Activity
    * is granted.
    */
   @AfterPermissionGranted(REQUEST_PERMISSION_GET_ACCOUNTS)
-  private void chooseAccount() {
+  private void chooseAccount(int numRows) {
     if (EasyPermissions.hasPermissions(
             this, Manifest.permission.GET_ACCOUNTS)) {
       String accountName = getPreferences(Context.MODE_PRIVATE)
               .getString(PREF_ACCOUNT_NAME, null);
       if (accountName != null) {
         mCredential.setSelectedAccountName(accountName);
-        getResultsFromApi();
+        getResultsFromApi(numRows);
       } else {
         // Start a dialog from which the user can choose an account
         startActivityForResult(mCredential.newChooseAccountIntent(), REQUEST_ACCOUNT_PICKER);
@@ -187,7 +208,7 @@ public class MainActivity extends Activity
                   "This app requires Google Play Services. Please install " +
                           "Google Play Services on your device and relaunch this app.");
         } else {
-          getResultsFromApi();
+          getResultsFromApi(-1);
         }
         break;
       case REQUEST_ACCOUNT_PICKER:
@@ -201,13 +222,13 @@ public class MainActivity extends Activity
             editor.putString(PREF_ACCOUNT_NAME, accountName);
             editor.apply();
             mCredential.setSelectedAccountName(accountName);
-            getResultsFromApi();
+            getResultsFromApi(-1);
           }
         }
         break;
       case REQUEST_AUTHORIZATION:
         if (resultCode == RESULT_OK) {
-          getResultsFromApi();
+          getResultsFromApi(-1);
         }
         break;
     }
@@ -303,10 +324,13 @@ public class MainActivity extends Activity
    * Placing the API calls in their own task ensures the UI stays responsive.
    */
   private class MakeRequestTask extends AsyncTask<Void, Void, List<String>> {
-    private com.google.api.services.sheets.v4.Sheets mService = null;
-    private Exception mLastError = null;
+    private com.google.api.services.sheets.v4.Sheets mService;
+    private Exception mLastError;
+    private int mRows;
 
-    MakeRequestTask(GoogleAccountCredential credential) {
+    MakeRequestTask(GoogleAccountCredential credential, int numRows) {
+      mRows = numRows;
+      mLastError = null;
       HttpTransport transport = AndroidHttp.newCompatibleTransport();
       JsonFactory jsonFactory = JacksonFactory.getDefaultInstance();
       mService = new com.google.api.services.sheets.v4.Sheets.Builder(
@@ -346,7 +370,9 @@ public class MainActivity extends Activity
       List<List<Object>> values = response.getValues();
       if (values != null) {
         results.add("Name, Major");
-        for (List row : values) {
+        int count = mRows > 0 ? mRows : values.size();
+        for (int i = 0; i < count; i++) {
+          List row = values.get(i);
           results.add(row.get(0) + ", " + row.get(4));
         }
       }
@@ -356,6 +382,8 @@ public class MainActivity extends Activity
     @Override
     protected void onPreExecute() {
       mOutputText.setText("");
+      String msg = mRows > 0 ? Integer.toString(mRows) : "all";
+      mProgress.setMessage("Fetching " + msg + " rows from Google Sheet ...");
       mProgress.show();
     }
 
